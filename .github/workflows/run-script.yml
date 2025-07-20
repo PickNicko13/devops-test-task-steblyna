@@ -1,0 +1,92 @@
+name: Run Hello Script
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+    inputs:
+      log_filename:
+        description: 'Optional custom log filename'
+        required: false
+        default: ''
+
+jobs:
+  run-script:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up script permissions
+      run: chmod +x scripts/hello.sh
+
+    - name: Run hello.sh script
+      id: run_script
+      run: |
+        # Run the script and capture output
+        output=$(./scripts/hello.sh "$GITHUB_EVENT_INPUTS_LOG_FILENAME")
+        # Save script output to a file for debugging
+        echo "$output" > script_output.txt
+        # Extract log filename from script output (assuming it's in the format logs/log-YYYYMMDD_HHMMSS.txt)
+        log_file=$(grep -o "logs/log-[0-9]\{8\}_[0-9]\{6\}\.txt" script_output.txt || echo "")
+        # If no log file found in output and custom log filename is provided, use it
+        if [ -z "$log_file" ] && [ -n "$GITHUB_EVENT_INPUTS_LOG_FILENAME" ]; then
+          log_file="logs/$GITHUB_EVENT_INPUTS_LOG_FILENAME"
+        fi
+        # If no log file found, fall back to the latest log file
+        if [ -z "$log_file" ]; then
+          log_file=$(ls -t logs/log-*.txt 2>/dev/null | head -n 1 || echo "")
+        fi
+        # Save log_file to output for subsequent steps
+        if [ -n "$log_file" ]; then
+          echo "log_file=$log_file" >> $GITHUB_OUTPUT
+        else
+          echo "Error: No log file could be determined"
+          exit 1
+        fi
+      env:
+        GITHUB_EVENT_INPUTS_LOG_FILENAME: ${{ github.event.inputs.log_filename }}
+
+    - name: Validate log file existence
+      run: |
+        log_file="$LOG_FILE"
+        if [ ! -f "$log_file" ]; then
+          echo "Error: Log file $log_file not found"
+          exit 1
+        fi
+        echo "Log file found: $log_file"
+      env:
+        LOG_FILE: ${{ steps.run_script.outputs.log_file }}
+
+    - name: Validate log file contents
+      run: |
+        log_file="$LOG_FILE"
+        # Check for greeting
+        if ! grep -q "Hello from Bash!" "$log_file"; then
+          echo "Error: Greeting message not found in log file"
+          exit 1
+        fi
+        # Check for valid timestamp
+        if ! grep -q "Date: .*" "$log_file"; then
+          echo "Error: Valid timestamp not found in log file"
+          exit 1
+        fi
+        # Check for numeric file count
+        if ! grep -q "FilesCount: [0-9]\+" "$log_file"; then
+          echo "Error: Valid file count not found in log file"
+          exit 1
+        fi
+      env:
+        LOG_FILE: ${{ steps.run_script.outputs.log_file }}
+
+    - name: Upload log file as artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: script-log
+        path: |
+          logs/log-*.txt
+          logs/${{ github.event.inputs.log_filename }}
+        retention-days: 7
